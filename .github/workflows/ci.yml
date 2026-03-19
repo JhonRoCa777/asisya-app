@@ -19,10 +19,10 @@ jobs:
           dotnet-version: '9.0.x'
 
       - name: Restore dependencies
-        run: dotnet restore asisya-back/asisya-server.slnx
+        run: dotnet restore ./asisya-back/asisya-server.slnx
 
       - name: Build Docker image
-        run: docker build -f asisya-back/Infrastructure/Dockerfile -t myapp:ci asisya-back
+        run: docker build -f ./asisya-back/Infrastructure/Dockerfile -t myapp:ci asisya-back
 
       - name: Run xUnit Tests
-        run: dotnet test asisya-back/Test/Test.csproj --logger "trx;LogFileName=test-results.trx"
+        run: dotnet test ./asisya-back/Test/Test.csproj --logger "trx;LogFileName=test-results.trx"
