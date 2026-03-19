@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Restore dependencies
+        run: dotnet restore asisya-back/asisya-server.slnx
+
+      - name: Build Docker image
+        run: docker build -f asisya-back/Infrastructure/Dockerfile -t myapp:ci asisya-back
+
+      - name: Run xUnit Tests
+        run: dotnet test asisya-back/Test/Test.csproj --logger "trx;LogFileName=test-results.trx"
