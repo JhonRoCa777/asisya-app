@@ -52,7 +52,10 @@ namespace Infrastructure.Repositories
             });
         }
 
-        public async Task<Result<List<ProductDTO>>> CreateByRowsAsync(int EntityRows, Guid ResponsableId, int simulateErrors)
+        public async Task<Result<List<ProductDTO>>> CreateByRowsAsync(
+    int EntityRows,
+    Guid ResponsableId,
+    int simulateErrors)
         {
             var categories = await _Context.Categories.ToListAsync();
             var suppliers = await _Context.Suppliers.ToListAsync();
@@ -98,14 +101,11 @@ namespace Infrastructure.Repositories
                         CreatedAt = DateTime.UtcNow,
                         CreatedBy = ResponsableId,
                         UpdatedAt = DateTime.UtcNow,
-                        UpdatedBy = ResponsableId,
-                        DeletedAt = null,
-                        DeletedBy = Guid.Empty
+                        UpdatedBy = ResponsableId
                     };
                 }
             }
 
-            // Acumular batches
             var batches = new List<List<ProductModel>>();
             var batch = new List<ProductModel>();
 
@@ -123,63 +123,81 @@ namespace Infrastructure.Repositories
             if (batch.Count != 0)
                 batches.Add(batch);
 
-            // Procesar en paralelo
             var failedProducts = new ConcurrentBag<ProductModel>();
+            var duplicates = new ConcurrentBag<ProductModel>();
 
             var sw = Stopwatch.StartNew();
 
-            await Task.WhenAll(
-                batches.Select(b => ProcessBatchDivideAndConquerAsync(b, failedProducts))
-            );
+            var parallelOptions = new ParallelOptions
+            {
+                MaxDegreeOfParallelism = 4
+            };
+
+            await Parallel.ForEachAsync(batches, parallelOptions, async (b, _) =>
+            {
+                await ProcessBatchAsync(b, failedProducts, duplicates);
+            });
 
             sw.Stop();
-            Console.WriteLine($"[CreateByRowsAsync] Tiempo total: {sw.Elapsed.TotalSeconds:F2}s — Batches: {batches.Count} — Filas: {EntityRows} — Errores: {simulateErrors}");
+
+            Console.WriteLine(
+                $"Tiempo: {sw.Elapsed.TotalSeconds:F2}s | Batches: {batches.Count} | Filas: {EntityRows}");
+
+            var result = failedProducts.Concat(duplicates).ToList();
 
             return Result<List<ProductDTO>>.Success(
-                _Mapper.Map<List<ProductDTO>>(failedProducts.ToList())
+                _Mapper.Map<List<ProductDTO>>(result)
             );
         }
 
-        private async Task ProcessBatchDivideAndConquerAsync(List<ProductModel> batch, ConcurrentBag<ProductModel> failedProducts)
+        private async Task ProcessBatchAsync(
+            List<ProductModel> batch,
+            ConcurrentBag<ProductModel> failedProducts,
+            ConcurrentBag<ProductModel> duplicates)
         {
-            batch = [.. batch
-                    .GroupBy(p => p.ProductName)
-                    .Select(g => g.First())];
+            await using var context = await _ContextFactory.CreateDbContextAsync();
+
+            // eliminar duplicados dentro del batch
+            batch = batch
+                .Where(p => !string.IsNullOrWhiteSpace(p.ProductName))
+                .GroupBy(p => p.ProductName)
+                .Select(g => g.First())
+                .ToList();
 
             if (batch.Count == 0) return;
 
-            if (batch.Count == 1)
-            {
-                await using var context = await _ContextFactory.CreateDbContextAsync();
-                try
-                {
-                    await context.BulkInsertOrUpdateAsync(batch, options =>
-                    {
-                        options.UpdateByProperties = [nameof(ProductModel.ProductName)];
-                        options.EnableStreaming = true;
-                    });
-                }
-                catch
-                {
-                    failedProducts.Add(batch[0]);
-                }
-                return;
-            }
+            var names = batch.Select(p => p.ProductName).ToList();
+
+            var existing = await context.Products
+                .Where(p => names.Contains(p.ProductName))
+                .Select(p => p.ProductName)
+                .ToHashSetAsync();
+
+            var duplicatedBatch = batch
+                .Where(p => existing.Contains(p.ProductName))
+                .ToList();
+
+            foreach (var d in duplicatedBatch)
+                duplicates.Add(d);
+
+            var toInsert = batch
+                .Where(p => !existing.Contains(p.ProductName))
+                .ToList();
+
+            if (toInsert.Count == 0) return;
 
             try
             {
-                await using var context = await _ContextFactory.CreateDbContextAsync();
-                await context.BulkInsertOrUpdateAsync(batch, options =>
+                await context.BulkInsertAsync(toInsert, options =>
                 {
-                    options.UpdateByProperties = [nameof(ProductModel.ProductName)];
+                    options.BatchSize = 5000;
                     options.EnableStreaming = true;
                 });
             }
             catch
             {
-                int mid = batch.Count / 2;
-                await ProcessBatchDivideAndConquerAsync(batch.Take(mid).ToList(), failedProducts);
-                await ProcessBatchDivideAndConquerAsync(batch.Skip(mid).ToList(), failedProducts);
+                foreach (var item in toInsert)
+                    failedProducts.Add(item);
             }
         }
 
