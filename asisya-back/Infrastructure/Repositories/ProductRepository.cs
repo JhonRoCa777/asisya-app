@@ -158,11 +158,10 @@ namespace Infrastructure.Repositories
             await using var context = await _ContextFactory.CreateDbContextAsync();
 
             // eliminar duplicados dentro del batch
-            batch = batch
+            batch = [.. batch
                 .Where(p => !string.IsNullOrWhiteSpace(p.ProductName))
                 .GroupBy(p => p.ProductName)
-                .Select(g => g.First())
-                .ToList();
+                .Select(g => g.First())];
 
             if (batch.Count == 0) return;
 
