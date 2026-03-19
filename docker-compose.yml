@@ -1,0 +1,57 @@
+version: "3.9"
+
+services:
+  postgres:
+    container_name: asisya_postgres_dev
+    image: postgres:16
+    # command: >
+    #   postgres
+    #   -c log_min_messages=FATAL
+    #   -c log_min_error_statement=FATAL
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: asisya_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d asisya_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  infrastructure:
+    container_name: asisya_infrastructure_dev
+    build:
+      context: ./asisya-back
+      dockerfile: Dockerfile
+    image: asisya_infrastructure:dev
+    ports:
+      - "8080:8080"
+      - "8081:8081"
+    environment:
+      ASPNETCORE_URLS: "http://+:8080"
+      ASPNETCORE_ENVIRONMENT: "Development"
+      DB_CONNECTION_STRING: "Host=postgres;Port=5432;Database=asisya_db;Username=postgres;Password=postgres"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  asisya_app_dev:
+    container_name: asisya_app_dev
+    build:
+      context: ./asisya-front
+      dockerfile: Dockerfile
+    image: asisya_app:dev
+    ports:
+      - "3000:80"
+    depends_on:
+      - infrastructure
+
+volumes:
+  postgres_data:
+    name: asisya_postgres_data
